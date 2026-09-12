@@ -1265,9 +1265,55 @@ function BlockSheet({ block, state, wk, etiqueta, recordatorio, onSave, onDelete
           <span style={{ fontSize: 13 }}>Activo esta semana</span>
         </label>
 
+        {/* qué hay que llevar ese día */}
+        <div style={{ border: "1px solid #E6CE9E", borderRadius: 10, padding: 12, marginBottom: 14, background: "#FBF9F2" }}>
+          <span style={{ fontSize: 12, color: "#7A5310", display: "block", marginBottom: 6, fontWeight: 600 }}>Hay que llevar algo</span>
+          <input
+            className="pf-in"
+            value={rec.texto}
+            placeholder="Mochila de piscina, disfraz, dinero…"
+            onChange={(e) => setRec({ ...rec, texto: e.target.value })}
+          />
+          {rec.texto.trim() && (
+            <div style={{ display: "flex", gap: 8, marginTop: 9, flexWrap: "wrap", alignItems: "center" }}>
+              <select className="pf-in" style={{ width: "auto" }} value={rec.antelacion} onChange={(e) => setRec({ ...rec, antelacion: +e.target.value })}>
+                <option value={15}>Avisar 15 min antes</option>
+                <option value={30}>Avisar 30 min antes</option>
+                <option value={60}>Avisar 1 hora antes</option>
+                <option value={120}>Avisar 2 horas antes</option>
+                <option value={720}>Avisar la noche antes</option>
+              </select>
+              <label style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 13 }}>
+                <input type="checkbox" checked={rec.repetir} onChange={(e) => setRec({ ...rec, repetir: e.target.checked })} style={{ accentColor: T.accent, width: 16, height: 16 }} />
+                Todas las semanas
+              </label>
+            </div>
+          )}
+        </div>
+
+        {/* a qué semanas afecta el cambio */}
+        {wk && (
+          <div style={{ border: `1px solid ${T.line}`, borderRadius: 10, padding: 12, marginBottom: 14, background: "#FBFCFA" }}>
+            <span style={{ fontSize: 12, color: T.soft, display: "block", marginBottom: 7 }}>¿A qué semanas afecta?</span>
+            <div className="pf-seg" style={{ width: "100%", display: "flex" }}>
+              <button style={{ flex: 1 }} data-on={alcance === "semana"} onClick={() => setAlcance("semana")}>
+                Solo {etiqueta ? etiqueta.toLowerCase() : "esta semana"}
+              </button>
+              <button style={{ flex: 1 }} data-on={alcance === "plantilla"} onClick={() => setAlcance("plantilla")}>
+                Todas las semanas
+              </button>
+            </div>
+            {b._exc && (
+              <button className="pf-btn" style={{ marginTop: 9, width: "100%", padding: 9 }} onClick={() => onRestore(b.id)}>
+                Volver a lo de siempre
+              </button>
+            )}
+          </div>
+        )}
+
         <div style={{ display: "flex", gap: 8 }}>
-          <button className="pf-btn" style={{ flex: 1, padding: 11, fontWeight: 600, background: T.accent, color: "#fff", borderColor: T.accent }} onClick={() => onSave(b)}>Guardar</button>
-          {exists && <button className="pf-btn" style={{ color: T.alert, borderColor: hexA(T.alert, .4), padding: "11px 14px" }} onClick={() => onDelete(b.id)}>Borrar</button>}
+          <button className="pf-btn" style={{ flex: 1, padding: 11, fontWeight: 600, background: T.accent, color: "#fff", borderColor: T.accent }} onClick={() => onSave({ ...b, _recordatorio: rec }, alcance)}>Guardar</button>
+          {exists && <button className="pf-btn" style={{ color: T.alert, borderColor: hexA(T.alert, .4), padding: "11px 14px" }} onClick={() => onDelete(b.id, alcance)}>Borrar</button>}
         </div>
       </div>
     </div>
