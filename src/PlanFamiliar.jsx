@@ -72,6 +72,12 @@ const lunesDe = (d) => {
   return x;
 };
 const claveSemana = (d) => isoFecha(lunesDe(d));
+const fechaDe = (clave, dia) => {
+  const [a, m, d] = clave.split("-").map(Number);
+  const x = new Date(a, m - 1, d);
+  x.setDate(x.getDate() + dia);
+  return isoFecha(x);
+};
 const sumaSemanas = (clave, n) => {
   const [a, m, d] = clave.split("-").map(Number);
   const x = new Date(a, m - 1, d);
@@ -473,7 +479,24 @@ export default function PlanFamiliar() {
     const w = (state.weeks || {})[wk] || {};
     const esExtra = (w.extra || []).some((x) => x.id === b.id);
     const limpio = { ...b };
-    delete limpio._exc; delete limpio._solo;
+    const rec = limpio._recordatorio;
+    delete limpio._exc; delete limpio._solo; delete limpio._recordatorio;
+
+    // los recordatorios viven junto al plan, atados a su bloque
+    const aplicaRecordatorio = (st) => {
+      if (rec === undefined) return st;
+      const lista = (st.reminders || []).filter((r) => r.blockId !== b.id || (wk && !rec.repetir ? r.fecha !== fechaDe(wk, b.day) : false));
+      if (!rec || !rec.texto || !rec.texto.trim()) return { ...st, reminders: (st.reminders || []).filter((r) => r.blockId !== b.id) };
+      const nuevo = {
+        id: rec.id || uid(),
+        blockId: b.id,
+        texto: rec.texto.trim(),
+        antelacion: rec.antelacion || 30,
+        repetir: !!rec.repetir,
+        fecha: rec.repetir ? null : wk ? fechaDe(wk, b.day) : null,
+      };
+      return { ...st, reminders: [...lista.filter((r) => r.id !== nuevo.id), nuevo] };
+    };
 
     if (!wk || alcance === "plantilla") {
       // si venía como excepción de esta semana, la excepción deja de tener sentido
@@ -482,15 +505,13 @@ export default function PlanFamiliar() {
         const edits = { ...w.edits }; delete edits[b.id];
         s = { ...s, weeks: { ...(s.weeks || {}), [wk]: { ...w, edits } } };
       }
-      persist(s);
-    } else if (enPlantilla) {
-      persist(conExcepcion(state, wk, b.id, limpio));
-    } else if (esExtra) {
-      persist(conExcepcion(state, wk, b.id, limpio));
+      persist(aplicaRecordatorio(s));
+    } else if (enPlantilla || esExtra) {
+      persist(aplicaRecordatorio(conExcepcion(state, wk, b.id, limpio)));
     } else {
       const weeks = { ...(state.weeks || {}) };
       weeks[wk] = { ...w, extra: [...(w.extra || []), limpio] };
-      persist({ ...state, weeks });
+      persist(aplicaRecordatorio({ ...state, weeks }));
     }
     setEditing(null);
   };
@@ -826,6 +847,7 @@ export default function PlanFamiliar() {
       {editing && (
         <BlockSheet
           block={editing} state={state} wk={wk} etiqueta={wk ? etiquetaSemana(wk) : null}
+          recordatorio={(state.reminders || []).find((r) => r.blockId === editing.id) || null}
           onSave={saveBlock} onDelete={removeBlock} onRestore={restaurar} onClose={() => setEditing(null)}
         />
       )}
@@ -1186,9 +1208,10 @@ const Sel = ({ value, onChange, options, empty }) => (
   </select>
 );
 
-function BlockSheet({ block, state, wk, etiqueta, onSave, onDelete, onRestore, onClose }) {
+function BlockSheet({ block, state, wk, etiqueta, recordatorio, onSave, onDelete, onRestore, onClose }) {
   const [b, setB] = useState(block);
   const [alcance, setAlcance] = useState("semana");
+  const [rec, setRec] = useState(recordatorio || { texto: "", antelacion: 30, repetir: true });
   const set = (patch) => setB({ ...b, ...patch });
   const people = state.people;
   const kids = people.filter((p) => p.role === "child");

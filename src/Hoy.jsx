@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { supabase } from "./supabase";
 import { leerPlan } from "./almacen";
+import { estadoPermiso, pedirPermiso, vigilar } from "./avisos";
 
 const T = { paper: "#EEF1EC", surface: "#fff", ink: "#19312F", soft: "#5E7472", faint: "#93A6A3", line: "#D5DED9", accent: "#2E6E63", alert: "#A32D3C", aviso: "#C07A1E" };
 const DIAS = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"];
@@ -33,18 +34,22 @@ export default function Hoy({ familiaId, socio, userId }) {
   const [nota, setNota] = useState("");
   const [desplazamiento, setDesplazamiento] = useState(0); // 0 hoy, 1 mañana
   const [cargando, setCargando] = useState(true);
+  const [hechos, setHechos] = useState([]);
+  const [permiso, setPermiso] = useState(estadoPermiso());
 
   const fecha = new Date();
   fecha.setDate(fecha.getDate() + desplazamiento);
   const indice = (fecha.getDay() + 6) % 7;
 
   const cargar = async () => {
-    const [p, { data: n }] = await Promise.all([
+    const [p, { data: n }, { data: h }] = await Promise.all([
       leerPlan(familiaId),
       supabase.from("notas").select("*").eq("familia_id", familiaId).eq("fecha", iso(fecha)).order("creada"),
+      supabase.from("hechos").select("*").eq("familia_id", familiaId).eq("fecha", iso(fecha)),
     ]);
     setPlan(p);
     setNotas(n || []);
+    setHechos(h || []);
     setCargando(false);
   };
   useEffect(() => { setCargando(true); cargar(); }, [familiaId, desplazamiento]);
@@ -60,6 +65,37 @@ export default function Hoy({ familiaId, socio, userId }) {
     cargar();
   };
 
+  const confirmar = async (recordatorioId) => {
+    await supabase.from("hechos").insert({ familia_id: familiaId, recordatorio_id: recordatorioId, fecha: iso(fecha), user_id: userId, autor: socio.nombre || "" });
+    cargar();
+  };
+  const desconfirmar = async (recordatorioId) => {
+    await supabase.from("hechos").delete().eq("familia_id", familiaId).eq("recordatorio_id", recordatorioId).eq("fecha", iso(fecha));
+    cargar();
+  };
+
+  useEffect(() => {
+    if (!plan || permiso !== "granted") return;
+    return vigilar(() => {
+      const hoy = new Date();
+      const base = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate());
+      const idx = (hoy.getDay() + 6) % 7;
+      const bloques = bloquesDe(plan, hoy);
+      const fin2 = (b) => (b.type === "school" && b.short ? plan.schoolEndShort : b.end);
+      const gente = Object.fromEntries(plan.people.map((p) => [p.id, p]));
+      return (plan.reminders || [])
+        .filter((r) => r.repetir || r.fecha === iso(hoy))
+        .map((r) => {
+          const b = bloques.find((x) => x.id === r.blockId && x.day === idx && x.active);
+          if (!b) return null;
+          const cuando = new Date(base.getTime() + (b.start * 60 - (r.antelacion || 30)) * 60000);
+          const nino = gente[b.personId];
+          return { id: r.id, texto: r.texto, cuando, etiqueta: `${nino ? nino.name : ""} · ${b.label || "Colegio"}`.trim() };
+        })
+        .filter(Boolean);
+    });
+  }, [plan, permiso]);
+
   if (cargando) return <div style={{ padding: 40, textAlign: "center", color: T.faint }}>Cargando…</div>;
 
   const kids = plan ? plan.people.filter((p) => p.role === "child") : [];
@@ -67,6 +103,9 @@ export default function Hoy({ familiaId, socio, userId }) {
   const fin = (b) => (b.type === "school" && b.short ? plan.schoolEndShort : b.end);
 
   const delDia = bloquesDe(plan, fecha);
+  const hechoDe = (rid) => hechos.find((h) => h.recordatorio_id === rid);
+  const recordatoriosDe = (b) =>
+    (plan.reminders || []).filter((r) => r.blockId === b.id && (r.repetir || r.fecha === iso(fecha)));
   const jornadas = kids.map((k) => {
     const bs = delDia
       .filter((b) => b.active && b.personId === k.id && b.day === indice)
@@ -92,6 +131,20 @@ export default function Hoy({ familiaId, socio, userId }) {
       <p style={{ fontSize: 14, color: T.soft, margin: "0 0 20px" }}>{subtitulo}</p>
 
       {!plan && <p style={{ color: T.faint }}>Todavía no hay ninguna semana montada.</p>}
+
+      {permiso === "default" && plan && (plan.reminders || []).length > 0 && (
+        <div style={{ background: "#FBF3E2", border: "1px solid #E6CE9E", borderRadius: 11, padding: "12px 14px", marginBottom: 16, display: "flex", gap: 11, alignItems: "center" }}>
+          <span style={{ flex: 1, fontSize: 13.5, color: "#7A5310", lineHeight: 1.4 }}>
+            Puedo avisarte antes de cada cosa que haya que llevar.
+          </span>
+          <button
+            onClick={async () => setPermiso(await pedirPermiso())}
+            style={{ border: 0, background: T.accent, color: "#fff", borderRadius: 9, padding: "9px 14px", font: "inherit", fontSize: 13.5, fontWeight: 600, cursor: "pointer", flexShrink: 0 }}
+          >
+            Activar avisos
+          </button>
+        </div>
+      )}
 
       {/* una tarjeta por niña, con lo justo y en grande */}
       <div style={{ display: "grid", gap: 12 }}>
@@ -124,6 +177,37 @@ export default function Hoy({ familiaId, socio, userId }) {
                       {b.withId && byId[b.withId] ? ` · con ${byId[b.withId].name}` : ""}
                     </div>
                   )}
+
+                  {recordatoriosDe(b).map((r) => {
+                    const h = hechoDe(r.id);
+                    return (
+                      <div
+                        key={r.id}
+                        style={{
+                          marginTop: 10, borderRadius: 10, padding: "11px 13px", display: "flex", gap: 11, alignItems: "center",
+                          background: h ? "#EDF4EF" : "#FBF3E2", border: `1px solid ${h ? "#C9DED2" : "#E6CE9E"}`,
+                        }}
+                      >
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 15.5, fontWeight: 600, color: h ? T.soft : "#7A5310", textDecoration: h ? "line-through" : "none" }}>
+                            {r.texto}
+                          </div>
+                          <div style={{ fontSize: 11.5, color: T.faint, marginTop: 2 }}>
+                            {h ? `${h.autor || "Alguien"} confirmó que lo lleva` : `Aviso ${r.antelacion >= 720 ? "la noche antes" : `${r.antelacion} min antes`}`}
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => (h ? desconfirmar(r.id) : confirmar(r.id))}
+                          style={{
+                            border: h ? `1px solid ${T.line}` : 0, background: h ? T.surface : T.accent, color: h ? T.soft : "#fff",
+                            borderRadius: 9, padding: "9px 14px", font: "inherit", fontSize: 13.5, fontWeight: 600, cursor: "pointer", flexShrink: 0,
+                          }}
+                        >
+                          {h ? "Deshacer" : "Lo tengo"}
+                        </button>
+                      </div>
+                    );
+                  })}
                 </div>
               );
             })}
