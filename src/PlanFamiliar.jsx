@@ -577,6 +577,13 @@ export default function PlanFamiliar() {
         @media (prefers-reduced-motion:reduce){.pf-sheet{animation:none}}
         .pf-scroll::-webkit-scrollbar{height:7px}
         .pf-scroll::-webkit-scrollbar-thumb{background:${T.line};border-radius:4px}
+        /* en el móvil el panel sube desde abajo; en pantalla grande, centrado */
+        .pf-wrap{position:fixed;inset:0;background:rgba(25,49,47,.45);display:flex;align-items:flex-end;justify-content:center;z-index:50}
+        .pf-modal{background:${T.surface};width:100%;max-width:460px;border-radius:16px 16px 0 0;padding:18px;max-height:88vh;overflow-y:auto;box-sizing:border-box}
+        @media (min-width:620px){
+          .pf-wrap{align-items:center;padding:22px}
+          .pf-modal{border-radius:16px;max-height:86vh;box-shadow:0 18px 50px rgba(25,49,47,.28)}
+        }
         @media print{
           @page{size:A4 landscape;margin:9mm}
           .pf-noprint{display:none!important}
@@ -1093,11 +1100,11 @@ function ShareSheet({ state, onClose, onRestore }) {
   );
 
   return (
-    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(25,49,47,.42)", display: "grid", placeItems: "end center", zIndex: 50 }}>
+    <div onClick={onClose} className="pf-wrap">
       <div
-        className="pf-sheet"
+        className="pf-sheet pf-modal"
         onClick={(e) => e.stopPropagation()}
-        style={{ background: T.surface, width: "100%", maxWidth: 520, borderRadius: "16px 16px 0 0", padding: 18, maxHeight: "88vh", overflowY: "auto", fontFamily: "'IBM Plex Sans', system-ui, sans-serif", color: T.ink }}
+        style={{ maxWidth: 520, fontFamily: "'IBM Plex Sans', system-ui, sans-serif", color: T.ink }}
       >
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
           <strong style={{ fontSize: 16, fontWeight: 600 }}>Compartir y guardar</strong>
@@ -1224,13 +1231,13 @@ function BlockSheet({ block, state, wk, etiqueta, recordatorio, onSave, onDelete
   }, [b.type]);
 
   return (
-    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(25,49,47,.42)", display: "grid", placeItems: "end center", zIndex: 50 }}>
+    <div onClick={onClose} className="pf-wrap">
       <div
-        className="pf-sheet"
+        className="pf-sheet pf-modal"
         onClick={(e) => e.stopPropagation()}
-        style={{ background: T.surface, width: "100%", maxWidth: 460, borderRadius: "16px 16px 0 0", padding: 18, maxHeight: "88vh", overflowY: "auto", fontFamily: "'IBM Plex Sans', system-ui, sans-serif", color: T.ink }}
+        style={{ fontFamily: "'IBM Plex Sans', system-ui, sans-serif", color: T.ink }}
       >
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, position: "sticky", top: -18, background: T.surface, paddingTop: 2, paddingBottom: 8, zIndex: 2 }}>
           <strong style={{ fontSize: 16, fontWeight: 600 }}>{exists ? "Editar" : "Añadir"}</strong>
           <button className="pf-btn" onClick={onClose}>Cerrar</button>
         </div>
