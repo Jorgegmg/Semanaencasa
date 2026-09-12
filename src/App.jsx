@@ -1,14 +1,16 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { supabase } from "./supabase";
-import { configurarAlmacen } from "./almacen";
+import { configurarAlmacen, ultimosCambios, deshacer } from "./almacen";
 import Acceso from "./Acceso";
 import Familia from "./Familia";
 import Inicio from "./Inicio";
+import Hoy from "./Hoy";
 import Peticiones from "./Peticiones";
 import Personas from "./Personas";
 import PlanFamiliar from "./PlanFamiliar";
 
 const T = { paper: "#EEF1EC", surface: "#fff", ink: "#19312F", soft: "#5E7472", faint: "#93A6A3", line: "#D5DED9", accent: "#2E6E63", alert: "#A32D3C", aviso: "#C07A1E" };
+const TITULOS = { hoy: "Hoy", semana: "La semana", peticiones: "Peticiones", personas: "Personas y accesos" };
 
 export default function App() {
   const [sesion, setSesion] = useState(null);
@@ -20,6 +22,7 @@ export default function App() {
   const [vista, setVista] = useState("inicio");
   const [pendientes, setPendientes] = useState(0);
   const [cuantos, setCuantos] = useState(0);
+  const [cambios, setCambios] = useState([]);
   const [menu, setMenu] = useState(false);
 
   useEffect(() => {
@@ -28,13 +31,15 @@ export default function App() {
     return () => sub.subscription.unsubscribe();
   }, []);
 
-  const contar = useCallback(async (fid) => {
-    const [{ count: p }, { count: m }] = await Promise.all([
+  const refrescar = useCallback(async (fid) => {
+    const [{ count: p }, { count: m }, cs] = await Promise.all([
       supabase.from("peticiones").select("id", { count: "exact", head: true }).eq("familia_id", fid).eq("estado", "pendiente"),
       supabase.from("miembros").select("user_id", { count: "exact", head: true }).eq("familia_id", fid),
+      ultimosCambios(fid, 4),
     ]);
     setPendientes(p || 0);
     setCuantos(m || 0);
+    setCambios(cs);
   }, []);
 
   const cargarPertenencia = useCallback(async () => {
@@ -43,11 +48,11 @@ export default function App() {
     if (data) {
       setSocio(data);
       setFamilia(data.familias);
-      configurarAlmacen({ familiaId: data.familia_id, puedeEditar: data.rol === "editor", userId: sesion.user.id });
+      configurarAlmacen({ familiaId: data.familia_id, puedeEditar: data.rol === "editor", userId: sesion.user.id, nombre: data.nombre });
       setVersion((v) => v + 1);
-      contar(data.familia_id);
+      refrescar(data.familia_id);
     } else setSocio(null);
-  }, [sesion, contar]);
+  }, [sesion, refrescar]);
 
   useEffect(() => { cargarPertenencia(); }, [cargarPertenencia]);
 
@@ -56,13 +61,14 @@ export default function App() {
     const canal = supabase
       .channel(`familia-${socio.familia_id}`)
       .on("postgres_changes", { event: "*", schema: "public", table: "planes", filter: `familia_id=eq.${socio.familia_id}` }, (p) => {
+        refrescar(socio.familia_id);
         if (p.new && p.new.actualizado_por === sesion.user.id) return;
         setAviso("Alguien acaba de cambiar la semana.");
       })
-      .on("postgres_changes", { event: "*", schema: "public", table: "peticiones", filter: `familia_id=eq.${socio.familia_id}` }, () => contar(socio.familia_id))
+      .on("postgres_changes", { event: "*", schema: "public", table: "peticiones", filter: `familia_id=eq.${socio.familia_id}` }, () => refrescar(socio.familia_id))
       .subscribe();
     return () => supabase.removeChannel(canal);
-  }, [socio, sesion, contar]);
+  }, [socio, sesion, refrescar]);
 
   const salir = async () => { await supabase.auth.signOut(); setSocio(null); setFamilia(null); setVista("inicio"); };
 
@@ -72,7 +78,8 @@ export default function App() {
 
   const editor = socio.rol === "editor";
   const secciones = [
-    { id: "inicio", etiqueta: "Inicio" },
+    { id: "inicio", etiqueta: "Menú" },
+    { id: "hoy", etiqueta: "Hoy" },
     { id: "semana", etiqueta: "Semana" },
     { id: "peticiones", etiqueta: editor ? "Peticiones" : "Pedir" },
     { id: "personas", etiqueta: "Personas" },
@@ -85,9 +92,13 @@ export default function App() {
     setVista("semana");
   };
 
+  const deshacerCambio = async (id) => {
+    const ok = await deshacer(socio.familia_id, id, sesion.user.id);
+    if (ok) { setVersion((v) => v + 1); refrescar(socio.familia_id); setAviso(""); }
+  };
+
   return (
-    <div style={{ minHeight: "100vh", background: T.paper, fontFamily: "'IBM Plex Sans', system-ui, sans-serif", paddingBottom: 62 }}>
-      {/* barra de cuenta */}
+    <div style={{ minHeight: "100vh", background: T.paper, fontFamily: "'IBM Plex Sans', system-ui, sans-serif", paddingBottom: "calc(64px + env(safe-area-inset-bottom))" }}>
       <div style={{ background: T.ink, color: "#fff", padding: "8px 14px", display: "flex", alignItems: "center", gap: 9, fontSize: 12.5 }}>
         <strong style={{ fontWeight: 600 }}>{familia ? familia.nombre : "Mi casa"}</strong>
         <span style={{ opacity: 0.6 }}>{socio.nombre || sesion.user.email}</span>
@@ -100,7 +111,7 @@ export default function App() {
         <div style={{ background: T.surface, borderBottom: `1px solid ${T.line}`, padding: 14, display: "flex", gap: 9, alignItems: "center", flexWrap: "wrap" }}>
           <span style={{ fontSize: 13, color: T.soft, flex: 1, minWidth: 140 }}>{sesion.user.email}</span>
           <button onClick={() => { setMenu(false); setVista("personas"); }} style={{ border: `1px solid ${T.line}`, background: T.surface, borderRadius: 8, padding: "8px 13px", font: "inherit", fontSize: 13, cursor: "pointer" }}>
-            Ver el código de familia
+            Código de familia
           </button>
           <button onClick={salir} style={{ border: `1px solid ${T.line}`, background: T.surface, borderRadius: 8, padding: "8px 13px", font: "inherit", fontSize: 13, cursor: "pointer" }}>Salir</button>
         </div>
@@ -115,14 +126,26 @@ export default function App() {
         </div>
       )}
 
-      {/* contenido */}
+      {vista !== "inicio" && (
+        <div style={{ position: "sticky", top: 0, zIndex: 30, background: T.surface, borderBottom: `1px solid ${T.line}`, padding: "8px 12px", display: "flex", alignItems: "center", gap: 10 }}>
+          <button
+            onClick={() => setVista("inicio")}
+            style={{ border: `1px solid ${T.line}`, background: T.surface, borderRadius: 8, padding: "6px 12px", font: "inherit", fontSize: 13, fontWeight: 500, color: T.ink, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}
+          >
+            <span style={{ fontSize: 15, lineHeight: 1, marginTop: -1 }}>‹</span> Menú
+          </button>
+          <span style={{ fontSize: 13, color: T.faint }}>{TITULOS[vista]}</span>
+        </div>
+      )}
+
       {vista === "inicio" && (
         <Inicio
           familia={familia} socio={socio} editor={editor} pendientes={pendientes} miembros={cuantos}
-          resumenHoy={editor ? "Organizas la semana de la casa." : "Puedes consultar la semana y pedir cambios."}
-          ir={setVista} nuevaFamilia={empezarDeCero}
+          cambios={cambios} onDeshacer={deshacerCambio} ir={setVista} nuevaFamilia={empezarDeCero}
         />
       )}
+
+      {vista === "hoy" && <Hoy familiaId={socio.familia_id} socio={socio} userId={sesion.user.id} key={version} />}
 
       {vista === "semana" && (
         <div style={{ pointerEvents: editor ? "auto" : "none" }}>
@@ -131,15 +154,14 @@ export default function App() {
       )}
 
       {vista === "peticiones" && (
-        <Peticiones familiaId={socio.familia_id} socio={socio} editor={editor} userId={sesion.user.id} alCambiar={() => contar(socio.familia_id)} />
+        <Peticiones familiaId={socio.familia_id} socio={socio} editor={editor} userId={sesion.user.id} alCambiar={() => refrescar(socio.familia_id)} />
       )}
 
       {vista === "personas" && (
         <Personas familia={familia} familiaId={socio.familia_id} editor={editor} userId={sesion.user.id} alCambiar={cargarPertenencia} />
       )}
 
-      {/* navegación */}
-      <nav style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: T.surface, borderTop: `1px solid ${T.line}`, display: "flex", zIndex: 40 }}>
+      <nav style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: T.surface, borderTop: `1px solid ${T.line}`, display: "flex", zIndex: 40, paddingBottom: "env(safe-area-inset-bottom)" }}>
         {secciones.map((s) => {
           const on = vista === s.id;
           return (
@@ -147,14 +169,14 @@ export default function App() {
               key={s.id}
               onClick={() => setVista(s.id)}
               style={{
-                flex: 1, border: 0, background: "transparent", font: "inherit", fontSize: 12, fontWeight: on ? 600 : 400,
-                color: on ? T.accent : T.faint, padding: "13px 4px 15px", cursor: "pointer", position: "relative",
+                flex: 1, border: 0, background: "transparent", font: "inherit", fontSize: 11.5, fontWeight: on ? 600 : 400,
+                color: on ? T.accent : T.faint, padding: "12px 2px 14px", cursor: "pointer", position: "relative",
                 borderTop: on ? `2px solid ${T.accent}` : "2px solid transparent", marginTop: -1,
               }}
             >
               {s.etiqueta}
               {s.id === "peticiones" && editor && pendientes > 0 && (
-                <span style={{ position: "absolute", top: 7, right: "50%", marginRight: -26, background: T.aviso, color: "#fff", fontSize: 10.5, fontWeight: 700, minWidth: 17, height: 17, borderRadius: 9, display: "grid", placeItems: "center", padding: "0 4px" }}>
+                <span style={{ position: "absolute", top: 5, left: "50%", marginLeft: 12, background: T.aviso, color: "#fff", fontSize: 10, fontWeight: 700, minWidth: 16, height: 16, borderRadius: 8, display: "grid", placeItems: "center", padding: "0 4px" }}>
                   {pendientes}
                 </span>
               )}

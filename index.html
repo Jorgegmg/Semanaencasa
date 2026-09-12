@@ -3,12 +3,26 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="theme-color" content="#EEF1EC" />
     <title>La semana en casa</title>
+
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+
+    <meta name="theme-color" content="#19312F" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="La semana" />
+    <meta name="description" content="El plan de la semana: horarios, quién lleva y quién recoge." />
+
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <style>
       html, body, #root { margin: 0; background: #EEF1EC; min-height: 100%; }
+      body { -webkit-tap-highlight-color: transparent; }
+      /* respeta la zona del notch y de la barra inferior del iPhone */
+      #root { padding-top: env(safe-area-inset-top); }
     </style>
   </head>
   <body>

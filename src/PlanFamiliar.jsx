@@ -57,6 +57,65 @@ const hexA = (hex, a) => {
   return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
 };
 
+/* ---------------- semana tipo y semanas concretas ------------------ */
+/*  La plantilla vive en state.blocks y vale para todas las semanas.
+ *  state.weeks["2026-09-14"] guarda solo las diferencias de esa semana:
+ *    edits:   cambios sobre un bloque de la plantilla
+ *    removed: bloques de la plantilla que esa semana no van
+ *    extra:   bloques que existen solo esa semana                      */
+
+const isoFecha = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const lunesDe = (d) => {
+  const x = new Date(d);
+  x.setDate(x.getDate() - ((x.getDay() + 6) % 7));
+  x.setHours(0, 0, 0, 0);
+  return x;
+};
+const claveSemana = (d) => isoFecha(lunesDe(d));
+const sumaSemanas = (clave, n) => {
+  const [a, m, d] = clave.split("-").map(Number);
+  const x = new Date(a, m - 1, d);
+  x.setDate(x.getDate() + n * 7);
+  return isoFecha(x);
+};
+function etiquetaSemana(clave) {
+  const [a, m, d] = clave.split("-").map(Number);
+  const ini = new Date(a, m - 1, d);
+  const fin = new Date(ini);
+  fin.setDate(fin.getDate() + 6);
+  const hoy = claveSemana(new Date());
+  if (clave === hoy) return "Esta semana";
+  if (clave === sumaSemanas(hoy, 1)) return "La semana que viene";
+  if (clave === sumaSemanas(hoy, -1)) return "La semana pasada";
+  const mes = (x) => x.toLocaleDateString("es-ES", { month: "short" }).replace(".", "");
+  return ini.getMonth() === fin.getMonth()
+    ? `${ini.getDate()}–${fin.getDate()} ${mes(ini)}`
+    : `${ini.getDate()} ${mes(ini)} – ${fin.getDate()} ${mes(fin)}`;
+}
+
+/* bloques que rigen en una semana concreta (null = la plantilla) */
+function bloquesDe(state, wk) {
+  if (!wk) return state.blocks;
+  const w = (state.weeks || {})[wk] || {};
+  const quitados = w.removed || [];
+  const edits = w.edits || {};
+  const base = state.blocks
+    .filter((b) => !quitados.includes(b.id))
+    .map((b) => (edits[b.id] ? { ...b, ...edits[b.id], _exc: true } : b));
+  return [...base, ...(w.extra || []).map((b) => ({ ...b, _exc: true, _solo: true }))];
+}
+
+/* guarda una diferencia de esa semana sin tocar la plantilla */
+function conExcepcion(state, wk, blockId, patch) {
+  const weeks = { ...(state.weeks || {}) };
+  const w = { ...(weeks[wk] || {}) };
+  const esExtra = (w.extra || []).some((x) => x.id === blockId);
+  if (esExtra) w.extra = w.extra.map((x) => (x.id === blockId ? { ...x, ...patch } : x));
+  else w.edits = { ...(w.edits || {}), [blockId]: { ...((w.edits || {})[blockId] || {}), ...patch } };
+  weeks[wk] = w;
+  return { ...state, weeks };
+}
+
 function withTags(people) {
   const firsts = {};
   people.forEach((p) => {
@@ -296,6 +355,7 @@ export default function PlanFamiliar() {
   const [editing, setEditing] = useState(null);
   const [panel, setPanel] = useState(false);
   const [share, setShare] = useState(false);
+  const [wk, setWk] = useState(() => claveSemana(new Date())); // null = semana tipo
 
   const today = (new Date().getDay() + 6) % 7;
   const nowH = new Date().getHours() + new Date().getMinutes() / 60;
@@ -331,9 +391,11 @@ export default function PlanFamiliar() {
 
   const lanes = lens === "all" ? kids : kids.filter((k) => k.id === lens);
 
+  const activos = useMemo(() => (state ? bloquesDe(state, wk) : []), [state, wk]);
+
   const kidBlocks = useMemo(
-    () => (state ? state.blocks.filter((b) => b.active && byId[b.personId] && byId[b.personId].role === "child") : []),
-    [state, byId]
+    () => activos.filter((b) => b.active && byId[b.personId] && byId[b.personId].role === "child"),
+    [activos, byId]
   );
 
   const gaps = useMemo(() => {
@@ -341,19 +403,19 @@ export default function PlanFamiliar() {
     const out = [];
     lanes.forEach((kid) => {
       for (let d = 0; d < 7; d++) {
-        const bs = state.blocks.filter((b) => b.active && b.personId === kid.id && b.day === d).map((b) => ({ ...b, e: effEnd(b) })).sort((a, b) => a.start - b.start);
+        const bs = activos.filter((b) => b.active && b.personId === kid.id && b.day === d).map((b) => ({ ...b, e: effEnd(b) })).sort((a, b) => a.start - b.start);
         for (let i = 0; i < bs.length - 1; i++)
           if (bs[i + 1].start > bs[i].e) out.push({ id: `${kid.id}${d}${i}`, personId: kid.id, day: d, start: bs[i].e, end: bs[i + 1].start });
       }
     });
     return out;
-  }, [state, lens, effEnd]);
+  }, [activos, lens, effEnd]);
 
   const loadRows = useMemo(() => {
     if (!state) return [];
     const rows = grownups.map((g) => {
       let hours = 0, drops = 0, picks = 0, work = 0;
-      state.blocks.filter((b) => b.active).forEach((b) => {
+      activos.filter((b) => b.active).forEach((b) => {
         if (b.type === "care" && b.withId === g.id) hours += effEnd(b) - b.start;
         if (b.type === "work" && b.personId === g.id) work += effEnd(b) - b.start;
         if (b.dropoffBy === g.id) drops++;
@@ -363,18 +425,18 @@ export default function PlanFamiliar() {
     });
     const max = Math.max(1, ...rows.map((r) => r.total));
     return rows.map((r) => ({ ...r, share: r.total / max }));
-  }, [state, effEnd]);
+  }, [activos, effEnd]);
 
   const unassigned = useMemo(
-    () => (state ? state.blocks.filter((b) => b.active && TYPES[b.type].transfer).reduce((n, b) => n + (b.dropoffBy ? 0 : 1) + (b.pickupBy ? 0 : 1), 0) : 0),
-    [state]
+    () => activos.filter((b) => b.active && TYPES[b.type].transfer).reduce((n, b) => n + (b.dropoffBy ? 0 : 1) + (b.pickupBy ? 0 : 1), 0),
+    [activos]
   );
 
   /* lo que pasa hoy, por niña */
   const todayLines = useMemo(() => {
     if (!state) return [];
     return kids.map((k) => {
-      const bs = state.blocks.filter((b) => b.active && b.personId === k.id && b.day === today && TYPES[b.type].transfer).sort((a, b) => a.start - b.start);
+      const bs = activos.filter((b) => b.active && b.personId === k.id && b.day === today && TYPES[b.type].transfer).sort((a, b) => a.start - b.start);
       if (!bs.length) return { kid: k, empty: true };
       const first = bs[0], last = bs[bs.length - 1];
       return {
@@ -386,25 +448,89 @@ export default function PlanFamiliar() {
         pick: last.pickupBy ? byId[last.pickupBy] : null,
       };
     });
-  }, [state, today, byId, effEnd]);
+  }, [activos, today, byId, effEnd]);
 
   if (loading)
     return <div style={{ background: T.paper, color: T.ink, minHeight: 340, display: "grid", placeItems: "center", fontFamily: "system-ui,sans-serif" }}>Abriendo el plan…</div>;
 
   const dayList = view === "week" ? [0, 1, 2, 3, 4, 5, 6] : [focusDay];
-  const isShort = (d) => state.blocks.some((b) => b.type === "school" && b.day === d && b.short);
-  const toggleShort = (d) => persist({ ...state, blocks: state.blocks.map((b) => (b.type === "school" && b.day === d ? { ...b, short: !b.short } : b)) });
-  const saveBlock = (b) => {
-    const ex = state.blocks.some((x) => x.id === b.id);
-    persist({ ...state, blocks: ex ? state.blocks.map((x) => (x.id === b.id ? b : x)) : [...state.blocks, b] });
+  const isShort = (d) => activos.some((b) => b.type === "school" && b.day === d && b.short);
+
+  const toggleShort = (d) => {
+    const nuevo = !isShort(d);
+    if (!wk) {
+      persist({ ...state, blocks: state.blocks.map((b) => (b.type === "school" && b.day === d ? { ...b, short: nuevo } : b)) });
+      return;
+    }
+    let s = state;
+    activos.filter((b) => b.type === "school" && b.day === d).forEach((b) => { s = conExcepcion(s, wk, b.id, { short: nuevo }); });
+    persist(s);
+  };
+
+  /* alcance: 'semana' cambia solo la semana visible, 'plantilla' todas */
+  const saveBlock = (b, alcance) => {
+    const enPlantilla = state.blocks.some((x) => x.id === b.id);
+    const w = (state.weeks || {})[wk] || {};
+    const esExtra = (w.extra || []).some((x) => x.id === b.id);
+    const limpio = { ...b };
+    delete limpio._exc; delete limpio._solo;
+
+    if (!wk || alcance === "plantilla") {
+      // si venía como excepción de esta semana, la excepción deja de tener sentido
+      let s = { ...state, blocks: enPlantilla ? state.blocks.map((x) => (x.id === b.id ? limpio : x)) : [...state.blocks, limpio] };
+      if (wk && (w.edits || {})[b.id]) {
+        const edits = { ...w.edits }; delete edits[b.id];
+        s = { ...s, weeks: { ...(s.weeks || {}), [wk]: { ...w, edits } } };
+      }
+      persist(s);
+    } else if (enPlantilla) {
+      persist(conExcepcion(state, wk, b.id, limpio));
+    } else if (esExtra) {
+      persist(conExcepcion(state, wk, b.id, limpio));
+    } else {
+      const weeks = { ...(state.weeks || {}) };
+      weeks[wk] = { ...w, extra: [...(w.extra || []), limpio] };
+      persist({ ...state, weeks });
+    }
     setEditing(null);
   };
-  const removeBlock = (id) => {
-    persist({ ...state, blocks: state.blocks.filter((x) => x.id !== id) });
+
+  const removeBlock = (id, alcance) => {
+    const enPlantilla = state.blocks.some((x) => x.id === id);
+    if (!wk || alcance === "plantilla") {
+      persist({ ...state, blocks: state.blocks.filter((x) => x.id !== id) });
+    } else {
+      const w = (state.weeks || {})[wk] || {};
+      const weeks = { ...(state.weeks || {}) };
+      weeks[wk] = enPlantilla
+        ? { ...w, removed: [...(w.removed || []), id] }
+        : { ...w, extra: (w.extra || []).filter((x) => x.id !== id) };
+      persist({ ...state, weeks });
+    }
     setEditing(null);
   };
-  const reschedule = (id, start, end) =>
-    persist({ ...state, blocks: state.blocks.map((x) => (x.id === id ? { ...x, start, end } : x)) });
+
+  /* arrastrar y estirar: afecta a lo que estés mirando */
+  const reschedule = (id, start, end) => {
+    if (!wk) persist({ ...state, blocks: state.blocks.map((x) => (x.id === id ? { ...x, start, end } : x)) });
+    else persist(conExcepcion(state, wk, id, { start, end }));
+  };
+
+  /* devolver un bloque a lo que dice la semana tipo */
+  const restaurar = (id) => {
+    if (!wk) return;
+    const w = (state.weeks || {})[wk] || {};
+    const edits = { ...(w.edits || {}) };
+    delete edits[id];
+    persist({ ...state, weeks: { ...(state.weeks || {}), [wk]: { ...w, edits, removed: (w.removed || []).filter((x) => x !== id) } } });
+    setEditing(null);
+  };
+
+  const excepciones = wk
+    ? Object.keys(((state.weeks || {})[wk] || {}).edits || {}).length +
+      (((state.weeks || {})[wk] || {}).extra || []).length +
+      (((state.weeks || {})[wk] || {}).removed || []).length
+    : 0;
   const dayW = view === "week" ? lanes.length * LANE_MIN + (showAdults ? RAIL : 0) : 0;
 
   return (
@@ -479,6 +605,33 @@ export default function PlanFamiliar() {
       </header>
 
       {panel && <Settings state={state} persist={persist} close={() => setPanel(false)} onReset={() => persist(SEED())} saved={saved} />}
+
+      {/* qué semana estoy mirando */}
+      <div style={{ background: wk ? T.surface : "#F4F1E8", borderBottom: `1px solid ${wk ? T.line : "#E2D9BF"}`, padding: "8px 12px", display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
+        {wk ? (
+          <>
+            <button className="pf-btn" onClick={() => setWk(sumaSemanas(wk, -1))} aria-label="Semana anterior" style={{ padding: "5px 11px" }}>‹</button>
+            <button className="pf-btn" onClick={() => setWk(claveSemana(new Date()))} style={{ fontWeight: 600, minWidth: 128 }}>
+              {etiquetaSemana(wk)}
+            </button>
+            <button className="pf-btn" onClick={() => setWk(sumaSemanas(wk, 1))} aria-label="Semana siguiente" style={{ padding: "5px 11px" }}>›</button>
+            {excepciones > 0 && (
+              <span style={{ fontSize: 11.5, color: "#8A5512", background: "#FBF0DC", border: "1px solid #E2C99A", borderRadius: 10, padding: "2px 9px", fontWeight: 600 }}>
+                {excepciones} {excepciones === 1 ? "cambio" : "cambios"} solo de esta semana
+              </span>
+            )}
+            <span style={{ flex: 1 }} />
+            <button className="pf-btn" onClick={() => setWk(null)}>Semana tipo</button>
+          </>
+        ) : (
+          <>
+            <strong style={{ fontSize: 13, color: "#6B5A2E" }}>Estás editando la semana tipo</strong>
+            <span style={{ fontSize: 12, color: "#8A7A4E" }}>los cambios valen para todas las semanas</span>
+            <span style={{ flex: 1 }} />
+            <button className="pf-btn" onClick={() => setWk(claveSemana(new Date()))}>Volver a esta semana</button>
+          </>
+        )}
+      </div>
 
       {/* ---------------------- cinta de hoy ---------------------- */}
       <div style={{ background: T.surface, borderBottom: `1px solid ${T.line}`, padding: "10px 14px" }}>
@@ -609,7 +762,7 @@ export default function PlanFamiliar() {
                   {/* barra de trabajo de los adultos */}
                   {showAdults && (
                     <div style={{ width: RAIL, flexShrink: 0, position: "relative", borderLeft: `1px solid ${T.hair}`, background: T.dim }}>
-                      {state.blocks.filter((b) => b.active && b.day === d && byId[b.personId] && byId[b.personId].role === "adult").map((b) => {
+                      {activos.filter((b) => b.active && b.day === d && byId[b.personId] && byId[b.personId].role === "adult").map((b) => {
                         const p = byId[b.personId];
                         const idx = workers.findIndex((w) => w.id === p.id);
                         const wpc = 100 / Math.max(1, workers.length);
@@ -670,7 +823,12 @@ export default function PlanFamiliar() {
         </p>
       </section>
 
-      {editing && <BlockSheet block={editing} state={state} onSave={saveBlock} onDelete={removeBlock} onClose={() => setEditing(null)} />}
+      {editing && (
+        <BlockSheet
+          block={editing} state={state} wk={wk} etiqueta={wk ? etiquetaSemana(wk) : null}
+          onSave={saveBlock} onDelete={removeBlock} onRestore={restaurar} onClose={() => setEditing(null)}
+        />
+      )}
       {share && <ShareSheet state={state} onClose={() => setShare(false)} onRestore={(s) => { persist(migrate(s)); setShare(false); }} />}
     </div>
   );
@@ -764,6 +922,12 @@ function Ticket({ b, kid, byId, end, onOpen, onCommit }) {
         boxShadow: gh ? `0 4px 12px ${hexA(kid.color, .3)}` : "none", zIndex: gh ? 20 : 1,
       }}
     >
+      {b._exc && (
+        <span
+          title="Cambiado solo para esta semana"
+          style={{ position: "absolute", top: -4, left: -4, width: 11, height: 11, borderRadius: 6, background: "#C07A1E", border: "2px solid #fff", zIndex: 5 }}
+        />
+      )}
       <div style={{ position: "absolute", inset: 0, borderRadius: 6, overflow: "hidden" }}>
         {withTransfer && <TicketBand person={drop} top band={band} locked={false} onDown={begin("top")} />}
         <div style={{ position: "absolute", top: band, height: room, left: 0, right: 0, padding: "2px 5px 2px 13px", overflow: "hidden" }}>
@@ -1022,14 +1186,15 @@ const Sel = ({ value, onChange, options, empty }) => (
   </select>
 );
 
-function BlockSheet({ block, state, onSave, onDelete, onClose }) {
+function BlockSheet({ block, state, wk, etiqueta, onSave, onDelete, onRestore, onClose }) {
   const [b, setB] = useState(block);
+  const [alcance, setAlcance] = useState("semana");
   const set = (patch) => setB({ ...b, ...patch });
   const people = state.people;
   const kids = people.filter((p) => p.role === "child");
   const grownups = people.filter((p) => p.role !== "child");
   const pool = TYPES[b.type].who === "child" ? kids : TYPES[b.type].who === "adult" ? people.filter((p) => p.role === "adult") : people;
-  const exists = state.blocks.some((x) => x.id === b.id);
+  const exists = state.blocks.some((x) => x.id === b.id) || !!b._exc;
 
   useEffect(() => {
     if (!pool.some((p) => p.id === b.personId) && pool[0]) set({ personId: pool[0].id });
